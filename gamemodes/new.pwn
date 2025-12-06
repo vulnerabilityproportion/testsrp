@@ -35,7 +35,7 @@ public OnVehicleSpawn(vehicleid)
 
 public OnPlayerStateChange(playerid, newstate, oldstate)
 {
-    DSDelivery_OnPlayerStateChange (playerid, newstate);
+    DSDelivery_OnPlayerStateChange (playerid, newstate, oldstate);
     return 1;
 }
 

@@ -29,6 +29,8 @@
 #define DSDELIVERY_MISSION_MSG_TIME_2   600
 #define DSDELIVERY_MISSION_MSG_TIME_3   300
 
+#define DSDELIVERY_TIME_WHEN_ERROR_START 60
+
 
 stock static bool:dsDelivery_eventStarted;
 stock static dsDelivery_eventTime;
@@ -71,6 +73,8 @@ stock static dsDelivery_missionTime;
 stock static dsDelivery_missionMessageTime[DSDELIVERY_MAX_MISSION_MSG_TIME] = {DSDELIVERY_MISSION_MSG_TIME_1, DSDELIVERY_MISSION_MSG_TIME_2, DSDELIVERY_MISSION_MSG_TIME_3};
 
 stock static dsDelivery_playerMark[MAX_PLAYERS] = {INVALID_STREAMER_ID, ...};
+stock static dsDelivery_driverid[MAX_VEHICLES] = {INVALID_PLAYER_ID, ...};
+stock static dsDelivery_lastDriverId[MAX_VEHICLES] = {INVALID_PLAYER_ID, ...};
 
 
 stock DSDelivery_Init ()
@@ -111,7 +115,7 @@ public DSDelivery_Timer1000ms ()
 
         --dsDelivery_missionTime;
 
-        if (!IsVehicleOccupied(dsDelivery_vehicleId))
+        if (IsValidVehicle(dsDelivery_vehicleId) && dsDelivery_driverid[dsDelivery_vehicleId] != INVALID_PLAYER_ID)
         {
             for (new i = 0; i < DSDELIVERY_MAX_MISSION_MSG_TIME; i++)
             {
@@ -138,11 +142,11 @@ stock DSDelivery_StartEvent ()
     if (dsDelivery_eventStarted)
         return;
     
-    dsDelivery_eventStarted = true;
-    dsDelivery_missionTime = DSDELIVERY_MISSION_TIME;
-
     if (dsDelivery_vehicleId != INVALID_VEHICLE_ID)
     {
+        dsDelivery_driverid[dsDelivery_vehicleId] = INVALID_PLAYER_ID;
+        dsDelivery_lastDriverId[dsDelivery_vehicleId] = INVALID_PLAYER_ID;
+
         DestroyVehicle(dsDelivery_vehicleId);
         dsDelivery_vehicleId = INVALID_VEHICLE_ID;
     }
@@ -153,6 +157,15 @@ stock DSDelivery_StartEvent ()
         dsDelivery_spawnInfo[randomPos][dsDelivery_spawnPos][0], dsDelivery_spawnInfo[randomPos][dsDelivery_spawnPos][1],
         dsDelivery_spawnInfo[randomPos][dsDelivery_spawnPos][2], dsDelivery_spawnInfo[randomPos][dsDelivery_spawnPos][3],
         -1, -1, 86400);
+    
+    if (!IsValidVehicle(dsDelivery_vehicleId))
+    {
+        dsDelivery_eventTime = DSDELIVERY_TIME_WHEN_ERROR_START;
+        return;
+    }
+    
+    dsDelivery_eventStarted = true;
+    dsDelivery_missionTime = DSDELIVERY_MISSION_TIME;
 
     dsDelivery_vehicleMarkTime = DSDELIVERY_VEHICLE_MARK_TIME;
     
@@ -180,6 +193,9 @@ stock DSDelivery_StopEvent ()
 
     if (dsDelivery_vehicleId != INVALID_VEHICLE_ID)
     {
+        dsDelivery_driverid[dsDelivery_vehicleId] = INVALID_PLAYER_ID;
+        dsDelivery_lastDriverId[dsDelivery_vehicleId] = INVALID_PLAYER_ID;
+
         DestroyVehicle(dsDelivery_vehicleId);
         dsDelivery_vehicleId = INVALID_VEHICLE_ID;
     }
@@ -206,6 +222,9 @@ stock DSDelivery_UpdateMark ()
 {
     if (!dsDelivery_eventStarted)
         return;
+    
+    if (dsDelivery_vehicleId == INVALID_VEHICLE_ID)
+        return;
 
     for (new i = 0, j = GetPlayerPoolSize(); i <= j; i++)
     {
@@ -218,10 +237,15 @@ stock DSDelivery_UpdateMark ()
         if (dsDelivery_playerMark[i] != INVALID_STREAMER_ID)
             DestroyDynamicMapIcon(dsDelivery_playerMark[i]);
         
+        if (dsDelivery_driverid[dsDelivery_vehicleId] == i)
+            continue;
+        
         new Float:pos[3];
         GetVehiclePos(dsDelivery_vehicleId, pos[0], pos[1], pos[2]);
-        dsDelivery_playerMark[i] = CreateDynamicMapIcon(pos[0], pos[1], pos[2], 51, 0, 0, 0, i, 50000.0);
+        dsDelivery_playerMark[i] = CreateDynamicMapIcon(pos[0], pos[1], pos[2], 51, 0, 0, 0, i, 50000.0, MAPICON_GLOBAL);
     }
+
+    dsDelivery_vehicleMarkTime = DSDELIVERY_VEHICLE_MARK_TIME;
 }
 
 stock DSDelivery_OnVehicleSpawn (vehicleid)
@@ -233,12 +257,13 @@ stock DSDelivery_OnVehicleSpawn (vehicleid)
     }
 }
 
-stock DSDelivery_OnPlayerStateChange (playerid, newstate)
+stock DSDelivery_OnPlayerStateChange (playerid, newstate, oldstate)
 {
     if (!dsDelivery_eventStarted)
         return;
 
-    if (newstate == PLAYER_STATE_DRIVER && GetPlayerVehicleID(playerid) == dsDelivery_vehicleId)
+    new vehicleid = GetPlayerVehicleID(playerid);
+    if (newstate == PLAYER_STATE_DRIVER && vehicleid == dsDelivery_vehicleId)
     {
         new fct = PlayerInfo[playerid][pFct];
 
@@ -248,21 +273,32 @@ stock DSDelivery_OnPlayerStateChange (playerid, newstate)
             return;
         }
 
-        new fctName[32];
-        Fct_GetName(fct, fctName);
+        if (dsDelivery_lastDriverId[vehicleid] != playerid)
+        {
+            new fctName[32];
+            Fct_GetName(fct, fctName);
 
-        DSDelivery_SendMessageType(FCT_BIKE, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Действует событие: "STR_LIGHTBLUE"\"Доставка деталей\""STR_WHITE"");
-        DSDelivery_SendFmtMessage(fct, COLOR_LIGHTBLUE, " [Событие] "STR_LIGHTBLUE"%s "STR_WHITE"находится за рулем Flatbed с деталями. Помогите в доставке деталей на склад фракции", 
-            PlayerInfo[playerid][pName]);
+            DSDelivery_SendMessageType(FCT_BIKE, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Действует событие: "STR_LIGHTBLUE"\"Доставка деталей\""STR_WHITE"");
+            DSDelivery_SendFmtMessage(fct, COLOR_LIGHTBLUE, " [Событие] "STR_LIGHTBLUE"%s "STR_WHITE"находится за рулем Flatbed с деталями. Помогите в доставке деталей на склад фракции", 
+                PlayerInfo[playerid][pName]);
 
-        for (new i = 0; i < MAX_FACTIONS; i++) {
-            if (factions[i][Fct_fctType] != FCT_BIKE) continue;
-            if (fct == i) continue;
-            DSDelivery_SendFmtMessage(i, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Flatbed перехвачен клубом "STR_LIGHTBLUE"%s"STR_WHITE". Перехватите или уничтожьте транспорт", fctName);
+            for (new i = 0; i < MAX_FACTIONS; i++) {
+                if (factions[i][Fct_fctType] != FCT_BIKE) continue;
+                if (fct == i) continue;
+                DSDelivery_SendFmtMessage(i, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Flatbed перехвачен клубом "STR_LIGHTBLUE"%s"STR_WHITE". Перехватите или уничтожьте транспорт", fctName);
+            }
         }
 
         DisablePlayerRaceCheckpoint(playerid);
         SetPlayerRaceCheckpoint(playerid, 1, dsDelivery_deliveryPos[fct][0], dsDelivery_deliveryPos[fct][1], dsDelivery_deliveryPos[fct][2], 0.0, 0.0, 0.0, 5.0);
+
+        dsDelivery_driverid[vehicleid] = playerid;
+    }
+    else if (newstate == PLAYER_STATE_ONFOOT && oldstate == PLAYER_STATE_DRIVER && vehicleid == dsDelivery_vehicleId)
+    {
+        dsDelivery_lastDriverId[vehicleid] = playerid;
+        dsDelivery_driverid[vehicleid] = INVALID_PLAYER_ID;
+        DisablePlayerRaceCheckpoint(playerid);
     }
 }
 
@@ -277,6 +313,9 @@ stock DSDelivery_OnPlayerDisconnect (playerid)
 
 stock DSDelivery_OnPlayerEnterRaceCP (playerid)
 {
+    if (!IsPlayerInAnyVehicle(playerid))
+        return;
+
     if (!dsDelivery_eventStarted)
         return;
 
@@ -288,24 +327,35 @@ stock DSDelivery_OnPlayerEnterRaceCP (playerid)
     if (!IsPlayerInRangeOfPoint(playerid, 10.0, dsDelivery_deliveryPos[fct][0], dsDelivery_deliveryPos[fct][1], dsDelivery_deliveryPos[fct][2]))
         return;
     
+    new vehicleid = GetPlayerVehicleID(playerid);
+    if (vehicleid != dsDelivery_vehicleId || GetPlayerState(playerid) != PLAYER_STATE_DRIVER)
+        return;
+    
     if (DSDelivery_StopEvent())
     {
         new fctName[32];
         Fct_GetName(fct, fctName);
 
         DSDelivery_SendFmtMessageType(FCT_BIKE, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Завершено событие: "STR_LIGHTBLUE"\"Доставка деталей\""STR_WHITE". Груз был доставлен клубом %s", fctName);
-        DSDelivery_SendFmtMessage(fct, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Ваша фракция получила: %d$ на банк клуба / %d рейтинга / %d материалов", 
-            DSDELIVERY_FCT_MONEY, DSDELIVERY_FCT_RATING, DSDELIVERY_FCT_MATERIALS);
-        DSDelivery_SendFmtMessage(fct, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Игрок %s получил за доставку груза: %d$ / %d рейтинга", 
-            PlayerInfo[playerid][pName], DSDELIVERY_PLAYER_MONEY, DSDELIVERY_PLAYER_RATING);
-        
-        Fct_AddMoney(fct, DSDELIVERY_FCT_MONEY);
-        Fct_AddRating(fct, DSDELIVERY_FCT_RATING);
-        Fct_AddWare(fct, DSDELIVERY_FCT_MATERIALS);
+        DSDelivery_GiveReward(playerid, fct);
 
-        GivePlayerMoney(playerid, DSDELIVERY_PLAYER_MONEY);
-        // AddPlayerRating(playerid, DSDELIVERY_PLAYER_RATING);
+        DisablePlayerRaceCheckpoint(playerid);
     }
+}
+
+stock DSDelivery_GiveReward (playerid, fctid)
+{
+    DSDelivery_SendFmtMessage(fctid, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Ваша фракция получила: %d$ на банк клуба / %d рейтинга / %d материалов", 
+        DSDELIVERY_FCT_MONEY, DSDELIVERY_FCT_RATING, DSDELIVERY_FCT_MATERIALS);
+    DSDelivery_SendFmtMessage(fctid, COLOR_LIGHTBLUE, " [Событие] "STR_WHITE"Игрок %s получил за доставку груза: %d$ / %d рейтинга", 
+        PlayerInfo[playerid][pName], DSDELIVERY_PLAYER_MONEY, DSDELIVERY_PLAYER_RATING);
+    
+    Fct_AddMoney(fctid, DSDELIVERY_FCT_MONEY);
+    Fct_AddRating(fctid, DSDELIVERY_FCT_RATING);
+    Fct_AddWare(fctid, DSDELIVERY_FCT_MATERIALS);
+
+    GivePlayerMoney(playerid, DSDELIVERY_PLAYER_MONEY);
+    // AddPlayerRating(playerid, DSDELIVERY_PLAYER_RATING);
 }
 
 stock DSDelivery_TP (playerid)
